@@ -6,7 +6,7 @@
 
 ## 部署
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/CoronaAustralis/CFSimpleFileManager.git)
 
 
 ## 最简单使用
