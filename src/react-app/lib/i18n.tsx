@@ -122,7 +122,11 @@ const dictionaries: Record<Locale, Record<string, string>> = {
 		visit_hint: "Leave empty for no limit.",
 		curl_upload: "Upload",
 		curl_download: "Download",
+		curl_download_by_path: "Download by path",
+		curl_download_by_ref: "Download by FILE_REF",
 		curl_list: "List files",
+		file_ref_hint:
+			"FILE_REF is the id field returned by the list API for each file.",
 		file_edit_hint:
 			"Select a file and open edit mode to rename it, move folders, switch buckets, or change its access level.",
 		share_empty_hint:
@@ -249,7 +253,10 @@ const dictionaries: Record<Locale, Record<string, string>> = {
 		visit_hint: "留空表示不限制次数。",
 		curl_upload: "上传",
 		curl_download: "下载",
+		curl_download_by_path: "按路径下载",
+		curl_download_by_ref: "按 FILE_REF 下载",
 		curl_list: "列出文件",
+		file_ref_hint: "FILE_REF 就是列文件接口返回的每个文件对象里的 id 字段。",
 		file_edit_hint:
 			"先选择一个文件再进入编辑模式，可以重命名、移动目录、切换存储桶或修改访问权限。",
 		share_empty_hint:

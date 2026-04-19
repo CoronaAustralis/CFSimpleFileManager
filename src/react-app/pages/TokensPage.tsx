@@ -112,6 +112,9 @@ export function TokensPage() {
 	const origin = window.location.origin;
 	const sampleBucketId = buckets[0]?.id ?? 1;
 	const tokenValue = latestToken || "$TOKEN";
+	const sampleFolderPath = "docs";
+	const sampleFileName = "example.txt";
+	const sampleFileRef = "FILE_REF";
 
 	return (
 		<div className="space-y-6">
@@ -253,23 +256,35 @@ export function TokensPage() {
 						<h3 className="text-lg font-semibold text-white">{t("curl_examples")}</h3>
 						<CodeBlock
 							label={t("curl_list")}
-							code={`curl "${origin}/api/files?bucket_id=${sampleBucketId}" \\
-  -H "Authorization: Bearer ${tokenValue}"`}
+							code={`curl --get "${origin}/api/files" \\
+  -H "Authorization: Bearer ${tokenValue}" \\
+  --data-urlencode "bucket_id=${sampleBucketId}" \\
+  --data-urlencode "folder_path=${sampleFolderPath}"`}
 						/>
 						<CodeBlock
 							label={t("curl_upload")}
 							code={`curl -X POST "${origin}/api/files/upload" \\
   -H "Authorization: Bearer ${tokenValue}" \\
   -F "file=@./example.txt" \\
-  -F "folder_path=docs" \\
+  -F "folder_path=${sampleFolderPath}" \\
   -F "bucket_id=${sampleBucketId}" \\
   -F "is_public=0"`}
 						/>
 						<CodeBlock
-							label={t("curl_download")}
-							code={`curl -L "${origin}/api/files/FILE_REF/download" \\
+							label={t("curl_download_by_path")}
+							code={`curl -L --get "${origin}/api/files/download" \\
   -H "Authorization: Bearer ${tokenValue}" \\
-  -o example.txt`}
+  --data-urlencode "bucket_id=${sampleBucketId}" \\
+  --data-urlencode "folder_path=${sampleFolderPath}" \\
+  --data-urlencode "file_name=${sampleFileName}" \\
+  -o ${sampleFileName}`}
+						/>
+						<CodeBlock
+							label={t("curl_download_by_ref")}
+							code={`curl -L "${origin}/api/files/${sampleFileRef}/download" \\
+  -H "Authorization: Bearer ${tokenValue}" \\
+  -o ${sampleFileName}`}
+							hint={t("file_ref_hint")}
 						/>
 					</div>
 				</section>
@@ -278,7 +293,15 @@ export function TokensPage() {
 	);
 }
 
-function CodeBlock({ label, code }: { label: string; code: string }) {
+function CodeBlock({
+	label,
+	code,
+	hint,
+}: {
+	label: string;
+	code: string;
+	hint?: string;
+}) {
 	return (
 		<div className="rounded-[22px] border border-white/10 bg-slate-950/45 p-4">
 			<p className="mb-3 text-xs uppercase tracking-[0.3em] text-cyan-200/70">
@@ -287,6 +310,7 @@ function CodeBlock({ label, code }: { label: string; code: string }) {
 			<pre className="overflow-x-auto whitespace-pre-wrap break-all text-sm text-slate-200">
 				<code>{code}</code>
 			</pre>
+			{hint ? <p className="mt-3 text-sm leading-6 text-slate-400">{hint}</p> : null}
 		</div>
 	);
 }

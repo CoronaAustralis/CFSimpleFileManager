@@ -167,6 +167,37 @@ fileRoutes.post("/upload", async (c) => {
 	);
 });
 
+fileRoutes.get("/download", async (c) => {
+	const requestedBucketId = parseInteger(c.req.query("bucket_id"));
+	const bucket = requestedBucketId
+		? await getBucketById(c.env.DB, requestedBucketId)
+		: await getDefaultBucket(c.env.DB);
+	if (!bucket) {
+		return jsonError(c, 404, "No storage bucket has been configured.");
+	}
+
+	const fileName = normalizeFileName(c.req.query("file_name"));
+	if (!fileName) {
+		return jsonError(c, 400, "A valid file_name is required.");
+	}
+
+	const folderPath = normalizeFolderPath(c.req.query("folder_path"));
+	const objectKey = buildObjectKey(folderPath, fileName);
+	const tracked = await getJoinedFileByLocation(c.env.DB, bucket.id, objectKey);
+	const auth = c.get("auth");
+	if ((!tracked || tracked.is_public !== 1) && !auth) {
+		return jsonError(c, 401, "Authentication required.");
+	}
+
+	return streamResolvedFile(
+		c.env,
+		c.env.DB,
+		bucket,
+		objectKey,
+		tracked,
+	);
+});
+
 fileRoutes.post("/:id/share", async (c) => {
 	const auth = requireAuth(c);
 	if (auth instanceof Response) {
