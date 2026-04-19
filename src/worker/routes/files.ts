@@ -287,6 +287,30 @@ fileRoutes.get("/:id/download", async (c) => {
 	);
 });
 
+fileRoutes.get("/:id/preview", async (c) => {
+	const resolved = await resolveFileReference(c.env.DB, c.req.param("id"));
+	if (!resolved) {
+		return jsonError(c, 404, "File not found.");
+	}
+
+	const auth = c.get("auth");
+	if ((!resolved.tracked || resolved.tracked.is_public !== 1) && !auth) {
+		return jsonError(c, 401, "Authentication required.");
+	}
+
+	return streamResolvedFile(
+		c.env,
+		c.env.DB,
+		resolved.bucket,
+		resolved.objectKey,
+		resolved.tracked,
+		{
+			disposition: "inline",
+			trackDownload: false,
+		},
+	);
+});
+
 fileRoutes.patch("/:id", async (c) => {
 	const auth = requireAuth(c);
 	if (auth instanceof Response) {

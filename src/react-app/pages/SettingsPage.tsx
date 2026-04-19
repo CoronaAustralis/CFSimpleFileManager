@@ -1,4 +1,5 @@
-import { useEffect, useEffectEvent, useState, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
+import { DialogShell } from "../components/DialogShell";
 import { Notice, type NoticeState } from "../components/Notice";
 import { bucketApi, type BucketListData } from "../lib/api";
 import { useI18n } from "../lib/i18n";
@@ -257,71 +258,6 @@ export function SettingsPage() {
 					</form>
 				</DialogShell>
 			) : null}
-		</div>
-	);
-}
-
-function DialogShell({
-	title,
-	children,
-	onClose,
-	disableClose = false,
-}: {
-	title: string;
-	children: ReactNode;
-	onClose: () => void;
-	disableClose?: boolean;
-}) {
-	useEffect(() => {
-		if (disableClose) {
-			return;
-		}
-
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "Escape") {
-				onClose();
-			}
-		};
-
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [disableClose, onClose]);
-
-	return (
-		<div
-			className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/72 px-4 py-6 backdrop-blur-md"
-			onClick={(event) => {
-				if (disableClose) {
-					return;
-				}
-
-				if (event.target === event.currentTarget) {
-					onClose();
-				}
-			}}
-		>
-			<div className="w-full max-w-xl overflow-hidden rounded-[30px] border border-white/12 bg-[linear-gradient(180deg,rgba(11,20,36,0.98)_0%,rgba(18,31,54,0.96)_100%)] shadow-[0_28px_90px_rgba(2,6,23,0.55)]">
-				<div className="flex items-start justify-between gap-4 border-b border-white/8 px-5 py-4 sm:px-6">
-					<div>
-						<p className="text-[11px] font-semibold uppercase tracking-[0.26em] text-cyan-200/72">
-							File Manager
-						</p>
-						<h3 className="mt-2 text-2xl font-semibold tracking-tight text-white">
-							{title}
-						</h3>
-					</div>
-					<button
-						type="button"
-						className="secondary-button h-11 w-11 shrink-0 rounded-2xl px-0 text-lg"
-						onClick={onClose}
-						disabled={disableClose}
-						aria-label={title}
-					>
-						×
-					</button>
-				</div>
-				<div className="px-5 py-5 sm:px-6 sm:py-6">{children}</div>
-			</div>
 		</div>
 	);
 }

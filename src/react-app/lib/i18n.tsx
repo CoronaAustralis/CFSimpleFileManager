@@ -26,6 +26,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
 		delete: "Delete",
 		disable: "Disable",
 		edit: "Edit",
+		preview: "Preview",
 		show: "Show",
 		copy: "Copy",
 		download: "Download",
@@ -80,6 +81,11 @@ const dictionaries: Record<Locale, Record<string, string>> = {
 		copy_share_url: "Copy short link",
 		delete_file: "Delete file",
 		edit_file: "Edit file",
+		preview_loading: "Loading preview…",
+		preview_not_supported:
+			"This file type is not previewable here yet. You can still download it.",
+		preview_error: "Preview could not be loaded.",
+		preview_empty: "The file is empty.",
 		tokens_title: "Script tokens",
 		tokens_subtitle:
 			"Create long-lived Bearer tokens for curl, scripts, cron jobs, or CI. Each token is shown in full only once.",
@@ -149,6 +155,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
 		delete: "删除",
 		disable: "停用",
 		edit: "编辑",
+		preview: "预览",
 		show: "显示",
 		copy: "复制",
 		download: "下载",
@@ -203,6 +210,10 @@ const dictionaries: Record<Locale, Record<string, string>> = {
 		copy_share_url: "复制短链",
 		delete_file: "删除文件",
 		edit_file: "编辑文件",
+		preview_loading: "正在加载预览…",
+		preview_not_supported: "当前暂不支持直接预览这个文件类型，你仍然可以下载它。",
+		preview_error: "预览加载失败。",
+		preview_empty: "这个文件是空的。",
 		tokens_title: "脚本令牌",
 		tokens_subtitle:
 			"给 curl、脚本、定时任务或 CI 创建长期 Bearer Token。完整令牌只会展示一次。",

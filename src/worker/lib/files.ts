@@ -360,6 +360,7 @@ export function serializeFile(origin: string, source: ListedFileSource) {
 		created_at: source.tracked?.created_at ?? source.uploadedAt ?? 0,
 		updated_at: source.tracked?.updated_at ?? source.uploadedAt ?? 0,
 		download_url: `${origin}/api/files/${fileRef}/download`,
+		preview_url: `${origin}/api/files/${fileRef}/preview`,
 		share: shareEnabled
 			? {
 					id: source.tracked!.share_id,
@@ -441,6 +442,10 @@ export async function streamResolvedFile(
 	bucket: StorageBucketRecord,
 	objectKey: string,
 	tracked: FileRow | null,
+	options?: {
+		disposition?: "attachment" | "inline";
+		trackDownload?: boolean;
+	},
 ): Promise<Response> {
 	const storage = resolveBucketBinding(env, bucket.binding_name);
 	if (!storage) {
@@ -464,7 +469,10 @@ export async function streamResolvedFile(
 		);
 	}
 
-	if (tracked) {
+	const disposition = options?.disposition ?? "attachment";
+	const trackDownload = options?.trackDownload ?? disposition === "attachment";
+
+	if (tracked && trackDownload) {
 		const now = unixTime();
 		await db
 			.prepare(
@@ -484,7 +492,11 @@ export async function streamResolvedFile(
 	);
 	headers.set(
 		"Content-Disposition",
-		formatAttachmentHeader(tracked?.file_name || location.fileName),
+		disposition === "attachment"
+			? formatAttachmentHeader(tracked?.file_name || location.fileName)
+			: `inline; filename*=UTF-8''${encodeURIComponent(
+					tracked?.file_name || location.fileName,
+			  )}`,
 	);
 	headers.set(
 		"Cache-Control",

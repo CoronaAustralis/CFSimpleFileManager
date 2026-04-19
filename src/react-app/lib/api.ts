@@ -66,6 +66,7 @@ export interface ManagedFile {
 	created_at: number;
 	updated_at: number;
 	download_url: string;
+	preview_url: string;
 	share: FileShareInfo | null;
 }
 

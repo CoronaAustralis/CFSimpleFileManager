@@ -1,4 +1,5 @@
-import { useEffect, useEffectEvent, useState, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
+import { DialogShell } from "../components/DialogShell";
 import { Notice, type NoticeState } from "../components/Notice";
 import {
 	fileApi,
@@ -39,6 +40,10 @@ export function FilesPage() {
 	const [shareFile, setShareFile] = useState<ManagedFile | null>(null);
 	const [shareMaxVisits, setShareMaxVisits] = useState("");
 	const [shareExpiresAt, setShareExpiresAt] = useState("");
+	const [previewFile, setPreviewFile] = useState<ManagedFile | null>(null);
+	const [previewState, setPreviewState] = useState<FilePreviewState>({
+		kind: "idle",
+	});
 
 	const loadFiles = async (overrides?: {
 		bucketId?: number;
@@ -72,7 +77,11 @@ export function FilesPage() {
 		void loadFilesEvent();
 	}, []);
 
-	const dialogOpen = isUploadDialogOpen || editingFile !== null || shareFile !== null;
+	const dialogOpen =
+		isUploadDialogOpen ||
+		editingFile !== null ||
+		shareFile !== null ||
+		previewFile !== null;
 
 	useEffect(() => {
 		if (!dialogOpen) {
@@ -169,6 +178,72 @@ export function FilesPage() {
 		setShareExpiresAt(toDateTimeLocal(file.share?.expires_at ?? null));
 	};
 
+	const openPreview = (file: ManagedFile) => {
+		setPreviewState({ kind: "loading" });
+		setPreviewFile(file);
+	};
+
+	useEffect(() => {
+		if (!previewFile) {
+			setPreviewState({ kind: "idle" });
+			return;
+		}
+
+		const previewKind = getPreviewKind(previewFile);
+		if (previewKind === "unsupported") {
+			setPreviewState({ kind: "unsupported" });
+			return;
+		}
+
+		const controller = new AbortController();
+		let objectUrl: string | null = null;
+
+		void (async () => {
+			try {
+				const response = await fetch(previewFile.preview_url, {
+					credentials: "include",
+					signal: controller.signal,
+				});
+				if (!response.ok) {
+					throw new Error(await extractResponseMessage(response));
+				}
+
+				if (previewKind === "text") {
+					const text = await response.text();
+					if (!controller.signal.aborted) {
+						setPreviewState({ kind: "text", text });
+					}
+					return;
+				}
+
+				const blob = await response.blob();
+				if (controller.signal.aborted) {
+					return;
+				}
+
+				objectUrl = URL.createObjectURL(blob);
+				setPreviewState({ kind: previewKind, objectUrl });
+			} catch (error) {
+				if (controller.signal.aborted) {
+					return;
+				}
+
+				setPreviewState({
+					kind: "error",
+					message:
+						error instanceof Error ? error.message : "Failed to load preview.",
+				});
+			}
+		})();
+
+		return () => {
+			controller.abort();
+			if (objectUrl) {
+				URL.revokeObjectURL(objectUrl);
+			}
+		};
+	}, [previewFile]);
+
 	const handleSaveEdit = async (event: React.FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		if (!editingFile) {
@@ -261,6 +336,9 @@ export function FilesPage() {
 			}
 			if (shareFile?.id === file.id) {
 				setShareFile(null);
+			}
+			if (previewFile?.id === file.id) {
+				setPreviewFile(null);
 			}
 			await loadFiles();
 		} catch (error) {
@@ -438,8 +516,10 @@ export function FilesPage() {
 								const shareUrl = file.share?.url ?? null;
 								const isEditing = editingFile?.id === file.id;
 								const isSharing = shareFile?.id === file.id;
-								const isActive = isEditing || isSharing;
+								const isPreviewing = previewFile?.id === file.id;
+								const isActive = isEditing || isSharing || isPreviewing;
 								const fileExtension = getFileExtension(file.file_name);
+								const canPreview = getPreviewKind(file) !== "unsupported";
 
 								return (
 									<article
@@ -548,6 +628,15 @@ export function FilesPage() {
 												>
 													{t("copy")}
 												</button>
+												{canPreview ? (
+													<button
+														type="button"
+														className={actionButtonClass(isPreviewing ? "active" : "default")}
+														onClick={() => openPreview(file)}
+													>
+														{t("preview")}
+													</button>
+												) : null}
 												<button
 													type="button"
 													className={actionButtonClass(isEditing ? "active" : "default")}
@@ -821,6 +910,111 @@ export function FilesPage() {
 							</form>
 						</DialogShell>
 					) : null}
+
+					{previewFile ? (
+						<DialogShell
+							title={`${t("preview")} - ${previewFile.file_name}`}
+							onClose={() => setPreviewFile(null)}
+							maxWidthClass={
+								previewState.kind === "image" ||
+								previewState.kind === "video" ||
+								previewState.kind === "pdf"
+									? "max-w-5xl"
+									: "max-w-4xl"
+							}
+						>
+							<div className="space-y-4">
+								<div className="rounded-[20px] border border-white/10 bg-white/[0.04] px-4 py-4">
+									<div className="flex flex-wrap items-center gap-2">
+										<h4 className="text-lg font-semibold text-white">
+											{previewFile.file_name}
+										</h4>
+										<span className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-xs text-slate-300">
+											{previewFile.content_type || "application/octet-stream"}
+										</span>
+										<span className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-xs text-slate-300">
+											{formatBytes(previewFile.size)}
+										</span>
+									</div>
+									<div className="mt-4 flex flex-wrap gap-3">
+										<a
+											className="primary-button px-4 py-2.5 text-sm"
+											href={previewFile.download_url}
+										>
+											{t("download")}
+										</a>
+										<button
+											type="button"
+											className="secondary-button px-4 py-2.5 text-sm"
+											onClick={() => handleCopy(previewFile.download_url)}
+										>
+											{t("copy_download_url")}
+										</button>
+									</div>
+								</div>
+
+								{previewState.kind === "loading" ? (
+									<div className="rounded-[24px] border border-white/10 bg-white/[0.03] px-5 py-10 text-center text-sm text-slate-300">
+										{t("preview_loading")}
+									</div>
+								) : null}
+
+								{previewState.kind === "error" ? (
+									<div className="rounded-[24px] border border-rose-400/18 bg-rose-400/10 px-5 py-8 text-sm text-rose-100">
+										{previewState.message || t("preview_error")}
+									</div>
+								) : null}
+
+								{previewState.kind === "unsupported" ? (
+									<div className="rounded-[24px] border border-white/10 bg-white/[0.03] px-5 py-8 text-sm text-slate-300">
+										{t("preview_not_supported")}
+									</div>
+								) : null}
+
+								{previewState.kind === "text" ? (
+									<pre className="max-h-[70vh] overflow-auto rounded-[24px] border border-white/10 bg-slate-950/55 px-5 py-5 text-sm leading-7 text-slate-100 whitespace-pre-wrap break-words">
+										{previewState.text || t("preview_empty")}
+									</pre>
+								) : null}
+
+								{previewState.kind === "image" && previewState.objectUrl ? (
+									<div className="rounded-[24px] border border-white/10 bg-slate-950/35 p-4">
+										<img
+											src={previewState.objectUrl}
+											alt={previewFile.file_name}
+											className="mx-auto max-h-[70vh] rounded-[20px] object-contain"
+										/>
+									</div>
+								) : null}
+
+								{previewState.kind === "pdf" && previewState.objectUrl ? (
+									<iframe
+										src={previewState.objectUrl}
+										title={previewFile.file_name}
+										className="h-[70vh] w-full rounded-[24px] border border-white/10 bg-white"
+									/>
+								) : null}
+
+								{previewState.kind === "video" && previewState.objectUrl ? (
+									<video
+										src={previewState.objectUrl}
+										controls
+										className="h-auto max-h-[70vh] w-full rounded-[24px] border border-white/10 bg-black"
+									/>
+								) : null}
+
+								{previewState.kind === "audio" && previewState.objectUrl ? (
+									<div className="rounded-[24px] border border-white/10 bg-white/[0.03] px-5 py-8">
+										<audio
+											src={previewState.objectUrl}
+											controls
+											className="w-full"
+										/>
+									</div>
+								) : null}
+							</div>
+						</DialogShell>
+					) : null}
 			</div>
 		</div>
 	);
@@ -875,73 +1069,6 @@ function MetaPill({ label, value }: { label: string; value: string }) {
 	);
 }
 
-function DialogShell({
-	title,
-	children,
-	onClose,
-	disableClose = false,
-}: {
-	title: string;
-	children: ReactNode;
-	onClose: () => void;
-	disableClose?: boolean;
-}) {
-	useEffect(() => {
-		if (disableClose) {
-			return;
-		}
-
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "Escape") {
-				onClose();
-			}
-		};
-
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [disableClose, onClose]);
-
-	return (
-		<div
-			className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/72 px-4 py-6 backdrop-blur-md"
-			onClick={(event) => {
-				if (disableClose) {
-					return;
-				}
-
-				if (event.target === event.currentTarget) {
-					onClose();
-				}
-			}}
-		>
-			<div className="w-full max-w-2xl overflow-hidden rounded-[30px] border border-white/12 bg-[linear-gradient(180deg,rgba(11,20,36,0.98)_0%,rgba(18,31,54,0.96)_100%)] shadow-[0_28px_90px_rgba(2,6,23,0.55)]">
-				<div className="flex items-start justify-between gap-4 border-b border-white/8 px-5 py-4 sm:px-6">
-					<div>
-						<p className="text-[11px] font-semibold uppercase tracking-[0.26em] text-cyan-200/72">
-							File Manager
-						</p>
-						<h3 className="mt-2 text-2xl font-semibold tracking-tight text-white">
-							{title}
-						</h3>
-					</div>
-					<button
-						type="button"
-						className="secondary-button h-11 w-11 shrink-0 rounded-2xl px-0 text-lg"
-						onClick={onClose}
-						disabled={disableClose}
-						aria-label={title}
-					>
-						×
-					</button>
-				</div>
-				<div className="max-h-[calc(100vh-9rem)] overflow-y-auto px-5 py-5 sm:px-6 sm:py-6">
-					{children}
-				</div>
-			</div>
-		</div>
-	);
-}
-
 function getFileExtension(fileName: string) {
 	const normalized = fileName.split(".").pop()?.trim().toUpperCase() || "";
 	if (!normalized) {
@@ -949,4 +1076,93 @@ function getFileExtension(fileName: string) {
 	}
 
 	return normalized.slice(0, 4);
+}
+
+type PreviewKind = "image" | "text" | "video" | "audio" | "pdf" | "unsupported";
+
+type FilePreviewState =
+	| { kind: "idle" | "loading" | "unsupported" }
+	| { kind: "error"; message: string }
+	| { kind: "text"; text: string }
+	| { kind: "image" | "video" | "audio" | "pdf"; objectUrl: string };
+
+function getPreviewKind(file: ManagedFile): PreviewKind {
+	const contentType = (file.content_type ?? "").toLowerCase();
+	const lowerName = file.file_name.toLowerCase();
+
+	if (
+		contentType.startsWith("image/") ||
+		[".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif"].some(
+			(suffix) => lowerName.endsWith(suffix),
+		)
+	) {
+		return "image";
+	}
+	if (
+		contentType.startsWith("video/") ||
+		[".mp4", ".webm", ".mov", ".m4v", ".ogv"].some((suffix) =>
+			lowerName.endsWith(suffix),
+		)
+	) {
+		return "video";
+	}
+	if (
+		contentType.startsWith("audio/") ||
+		[".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"].some((suffix) =>
+			lowerName.endsWith(suffix),
+		)
+	) {
+		return "audio";
+	}
+	if (contentType === "application/pdf" || lowerName.endsWith(".pdf")) {
+		return "pdf";
+	}
+	if (
+		contentType.startsWith("text/") ||
+		[
+			"application/json",
+			"application/xml",
+			"application/javascript",
+			"application/typescript",
+			"application/x-sh",
+			"application/yaml",
+			"application/x-yaml",
+		].includes(contentType) ||
+		[
+			".txt",
+			".md",
+			".json",
+			".js",
+			".ts",
+			".tsx",
+			".jsx",
+			".css",
+			".html",
+			".xml",
+			".yml",
+			".yaml",
+			".csv",
+			".log",
+			".ini",
+		].some((suffix) => lowerName.endsWith(suffix))
+	) {
+		return "text";
+	}
+
+	return "unsupported";
+}
+
+async function extractResponseMessage(response: Response): Promise<string> {
+	try {
+		const payload = (await response.json()) as {
+			error?: { message?: string };
+		};
+		if (payload?.error?.message) {
+			return payload.error.message;
+		}
+	} catch {
+		// Ignore JSON parse errors and fall back to status text.
+	}
+
+	return response.statusText || "Failed to load preview.";
 }
