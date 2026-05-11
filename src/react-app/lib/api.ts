@@ -16,6 +16,8 @@ interface ApiEnvelope<T> {
 	};
 }
 
+const DIRECT_UPLOAD_LIMIT = 16 * 1024 * 1024;
+
 export interface AuthSession {
 	username: string;
 	auth_method: "session" | "token";
@@ -172,6 +174,129 @@ async function uploadRequest<T>(
 	});
 }
 
+async function uploadBinaryRequest<T>(
+	path: string,
+	body: Blob,
+	onProgress?: (progress: number) => void,
+): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		xhr.open("PUT", path);
+		xhr.withCredentials = true;
+		xhr.setRequestHeader("Accept", "application/json");
+		xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+		xhr.upload.onprogress = (event) => {
+			if (!onProgress) {
+				return;
+			}
+
+			if (event.lengthComputable && event.total > 0) {
+				onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+			}
+		};
+
+		xhr.onerror = () => {
+			reject(new ApiError("Network error.", xhr.status || 0));
+		};
+
+		xhr.onload = () => {
+			const text = xhr.responseText;
+			const payload = text ? (JSON.parse(text) as ApiEnvelope<T>) : null;
+
+			if (xhr.status < 200 || xhr.status >= 300 || !payload?.ok || payload.data === undefined) {
+				const message =
+					payload?.error?.message || xhr.statusText || "Request failed";
+				reject(new ApiError(message, xhr.status));
+				return;
+			}
+
+			onProgress?.(100);
+			resolve(payload.data);
+		};
+
+		xhr.send(body);
+	});
+}
+
+interface MultipartUploadInitData {
+	upload_session_id: string;
+	chunk_size: number;
+}
+
+interface MultipartUploadedPart {
+	partNumber: number;
+	etag: string;
+}
+
+async function multipartUploadRequest(
+	payload: {
+		file: File;
+		folder_path?: string;
+		bucket_id?: number;
+		is_public?: boolean;
+		onProgress?: (progress: number) => void;
+	},
+): Promise<{ file: ManagedFile }> {
+	const initiated = await request<MultipartUploadInitData>("/api/files/uploads/initiate", {
+		method: "POST",
+		body: JSON.stringify({
+			file_name: payload.file.name,
+			folder_path: payload.folder_path,
+			bucket_id: payload.bucket_id,
+			content_type: payload.file.type || "application/octet-stream",
+			size: payload.file.size,
+			is_public: payload.is_public ? 1 : 0,
+		}),
+	});
+
+	const uploadSessionId = initiated.upload_session_id;
+	const chunkSize = Math.max(5 * 1024 * 1024, initiated.chunk_size || 0);
+	const totalSize = payload.file.size;
+	const uploadedParts: MultipartUploadedPart[] = [];
+	let uploadedBytes = 0;
+
+	try {
+		for (let offset = 0, partNumber = 1; offset < totalSize; offset += chunkSize, partNumber += 1) {
+			const chunk = payload.file.slice(offset, Math.min(totalSize, offset + chunkSize));
+			const part = await uploadBinaryRequest<{ part: MultipartUploadedPart }>(
+				`/api/files/uploads/${uploadSessionId}/parts/${partNumber}`,
+				chunk,
+				(progress) => {
+					if (!payload.onProgress || totalSize <= 0) {
+						return;
+					}
+
+					const chunkUploaded = Math.round((chunk.size * progress) / 100);
+					const totalProgress = Math.min(
+						100,
+						Math.round(((uploadedBytes + chunkUploaded) / totalSize) * 100),
+					);
+					payload.onProgress(totalProgress);
+				},
+			);
+			uploadedParts.push(part.part);
+			uploadedBytes += chunk.size;
+			payload.onProgress?.(
+				Math.min(100, Math.round((uploadedBytes / totalSize) * 100)),
+			);
+		}
+
+		return request<{ file: ManagedFile }>(
+			`/api/files/uploads/${uploadSessionId}/complete`,
+			{
+				method: "POST",
+				body: JSON.stringify({ parts: uploadedParts }),
+			},
+		);
+	} catch (error) {
+		void request<{ aborted: boolean }>(`/api/files/uploads/${uploadSessionId}`, {
+			method: "DELETE",
+		}).catch(() => undefined);
+		throw error;
+	}
+}
+
 export const authApi = {
 	login: (password: string) =>
 		request<AuthSession>("/api/auth/login", {
@@ -225,6 +350,10 @@ export const fileApi = {
 		is_public?: boolean;
 		onProgress?: (progress: number) => void;
 	}) => {
+		if (payload.file.size > DIRECT_UPLOAD_LIMIT) {
+			return multipartUploadRequest(payload);
+		}
+
 		const formData = new FormData();
 		formData.append("file", payload.file);
 		if (payload.folder_path) {

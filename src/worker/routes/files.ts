@@ -32,6 +32,7 @@ import { resolveBucketBinding, sha256Hex } from "../lib/storage";
 
 export const fileRoutes = new Hono<AppContext>();
 export const shareRoutes = new Hono<AppContext>();
+const BROWSER_MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024;
 
 fileRoutes.get("/", async (c) => {
 	const auth = requireAuth(c);
@@ -165,6 +166,276 @@ fileRoutes.post("/upload", async (c) => {
 		},
 		201,
 	);
+});
+
+fileRoutes.post("/uploads/initiate", async (c) => {
+	const auth = requireAuth(c);
+	if (auth instanceof Response) {
+		return auth;
+	}
+
+	let payload:
+		| {
+				file_name?: string;
+				folder_path?: string;
+				bucket_id?: number;
+				content_type?: string | null;
+				size?: number;
+				is_public?: boolean | number | string;
+		  }
+		| null = null;
+	try {
+		payload = await c.req.json<{
+			file_name?: string;
+			folder_path?: string;
+			bucket_id?: number;
+			content_type?: string | null;
+			size?: number;
+			is_public?: boolean | number | string;
+		}>();
+	} catch {
+		return jsonError(c, 400, "Invalid upload payload.");
+	}
+
+	const requestedBucketId = payload?.bucket_id;
+	const bucket = requestedBucketId
+		? await getBucketById(c.env.DB, requestedBucketId)
+		: await getDefaultBucket(c.env.DB);
+	if (!bucket || bucket.is_enabled !== 1) {
+		return jsonError(c, 400, "A valid enabled bucket is required.");
+	}
+
+	const fileName = normalizeFileName(payload?.file_name);
+	if (!fileName) {
+		return jsonError(c, 400, "The uploaded file name is invalid.");
+	}
+
+	const fileSize = payload?.size;
+	if (typeof fileSize !== "number" || !Number.isInteger(fileSize) || fileSize < 0) {
+		return jsonError(c, 400, "A valid file size is required.");
+	}
+	const validatedFileSize = fileSize;
+
+	const folderPath = normalizeFolderPath(payload?.folder_path);
+	const objectKey = buildObjectKey(folderPath, fileName);
+	const storage = resolveBucketBinding(c.env, bucket.binding_name);
+	if (!storage) {
+		return jsonError(c, 500, "The configured bucket binding is not available.");
+	}
+
+	const existing = await storage.head(objectKey);
+	if (existing) {
+		return jsonError(
+			c,
+			409,
+			"A file with the same name already exists in this folder.",
+		);
+	}
+
+	const staleTracked = await getJoinedFileByLocation(
+		c.env.DB,
+		bucket.id,
+		objectKey,
+	);
+	if (staleTracked) {
+		await deleteTrackedFileRecord(c.env.DB, staleTracked.id);
+	}
+
+	const contentType =
+		typeof payload?.content_type === "string" && payload.content_type.trim()
+			? payload.content_type.trim()
+			: "application/octet-stream";
+	const multipartUpload = await storage.createMultipartUpload(objectKey, {
+		httpMetadata: {
+			contentType,
+		},
+	});
+	const now = unixTime();
+	const uploadSessionId = crypto.randomUUID();
+	await c.env.DB
+		.prepare(
+			"INSERT INTO multipart_uploads (id, bucket_id, object_key, folder_path, file_name, content_type, size, is_public, upload_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		)
+		.bind(
+			uploadSessionId,
+			bucket.id,
+			objectKey,
+			folderPath,
+			fileName,
+			contentType,
+			validatedFileSize,
+			parseBooleanLike(payload?.is_public) ? 1 : 0,
+			multipartUpload.uploadId,
+			now,
+			now,
+		)
+		.run();
+
+	return jsonSuccess(c, {
+		upload_session_id: uploadSessionId,
+		chunk_size: BROWSER_MULTIPART_CHUNK_SIZE,
+	});
+});
+
+fileRoutes.put("/uploads/:sessionId/parts/:partNumber", async (c) => {
+	const auth = requireAuth(c);
+	if (auth instanceof Response) {
+		return auth;
+	}
+
+	const session = await getMultipartUploadSession(c.env.DB, c.req.param("sessionId"));
+	if (!session) {
+		return jsonError(c, 404, "Upload session not found.");
+	}
+
+	const bucket = await getBucketById(c.env.DB, session.bucket_id);
+	if (!bucket) {
+		return jsonError(c, 404, "Upload bucket not found.");
+	}
+
+	const storage = resolveBucketBinding(c.env, bucket.binding_name);
+	if (!storage) {
+		return jsonError(c, 500, "The configured bucket binding is not available.");
+	}
+
+	const partNumber = Number.parseInt(c.req.param("partNumber"), 10);
+	if (!Number.isInteger(partNumber) || partNumber < 1) {
+		return jsonError(c, 400, "A valid part number is required.");
+	}
+
+	if (!c.req.raw.body) {
+		return jsonError(c, 400, "Upload chunk body is required.");
+	}
+
+	const multipartUpload = storage.resumeMultipartUpload(
+		session.object_key,
+		session.upload_id,
+	);
+	const part = await multipartUpload.uploadPart(partNumber, c.req.raw.body);
+	await c.env.DB
+		.prepare("UPDATE multipart_uploads SET updated_at = ? WHERE id = ?")
+		.bind(unixTime(), session.id)
+		.run();
+
+	return jsonSuccess(c, { part });
+});
+
+fileRoutes.post("/uploads/:sessionId/complete", async (c) => {
+	const auth = requireAuth(c);
+	if (auth instanceof Response) {
+		return auth;
+	}
+
+	const session = await getMultipartUploadSession(c.env.DB, c.req.param("sessionId"));
+	if (!session) {
+		return jsonError(c, 404, "Upload session not found.");
+	}
+
+	const bucket = await getBucketById(c.env.DB, session.bucket_id);
+	if (!bucket) {
+		return jsonError(c, 404, "Upload bucket not found.");
+	}
+
+	const storage = resolveBucketBinding(c.env, bucket.binding_name);
+	if (!storage) {
+		return jsonError(c, 500, "The configured bucket binding is not available.");
+	}
+
+	let payload: { parts?: Array<{ partNumber?: number; etag?: string }> } | null =
+		null;
+	try {
+		payload = await c.req.json<{
+			parts?: Array<{ partNumber?: number; etag?: string }>;
+		}>();
+	} catch {
+		return jsonError(c, 400, "Invalid upload completion payload.");
+	}
+
+	const rawParts = payload?.parts ?? [];
+	if (rawParts.length === 0) {
+		return jsonError(c, 400, "At least one uploaded part is required.");
+	}
+
+	const parts = rawParts
+		.map((part) => ({
+			partNumber: part.partNumber ?? 0,
+			etag: typeof part.etag === "string" ? part.etag : "",
+		}))
+		.filter((part) => Number.isInteger(part.partNumber) && part.partNumber > 0 && part.etag)
+		.sort((left, right) => left.partNumber - right.partNumber);
+	if (parts.length !== rawParts.length) {
+		return jsonError(c, 400, "Uploaded parts are invalid.");
+	}
+
+	const multipartUpload = storage.resumeMultipartUpload(
+		session.object_key,
+		session.upload_id,
+	);
+	const completed = await multipartUpload.complete(parts);
+	await c.env.DB
+		.prepare("DELETE FROM multipart_uploads WHERE id = ?")
+		.bind(session.id)
+		.run();
+
+	const tracked =
+		session.is_public === 1
+			? await ensureTrackedFile(c.env.DB, {
+					bucketId: bucket.id,
+					objectKey: session.object_key,
+					contentType: completed.httpMetadata?.contentType ?? session.content_type,
+					size: completed.size,
+					etagOrChecksum: completed.etag ?? null,
+					isPublic: true,
+			  })
+			: null;
+
+	const origin = new URL(c.req.url).origin;
+	return jsonSuccess(c, {
+		file: tracked
+			? serializeTrackedFile(origin, bucket, tracked)
+			: serializeFile(origin, {
+					bucket,
+					objectKey: session.object_key,
+					folderPath: session.folder_path,
+					fileName: session.file_name,
+					contentType: completed.httpMetadata?.contentType ?? session.content_type,
+					size: completed.size,
+					etagOrChecksum: completed.etag ?? null,
+					uploadedAt: unixTime(),
+					tracked: null,
+			  }),
+	});
+});
+
+fileRoutes.delete("/uploads/:sessionId", async (c) => {
+	const auth = requireAuth(c);
+	if (auth instanceof Response) {
+		return auth;
+	}
+
+	const session = await getMultipartUploadSession(c.env.DB, c.req.param("sessionId"));
+	if (!session) {
+		return jsonSuccess(c, { aborted: true });
+	}
+
+	const bucket = await getBucketById(c.env.DB, session.bucket_id);
+	if (bucket) {
+		const storage = resolveBucketBinding(c.env, bucket.binding_name);
+		if (storage) {
+			const multipartUpload = storage.resumeMultipartUpload(
+				session.object_key,
+				session.upload_id,
+			);
+			await multipartUpload.abort();
+		}
+	}
+
+	await c.env.DB
+		.prepare("DELETE FROM multipart_uploads WHERE id = ?")
+		.bind(session.id)
+		.run();
+
+	return jsonSuccess(c, { aborted: true });
 });
 
 fileRoutes.get("/download", async (c) => {
@@ -574,6 +845,34 @@ shareRoutes.get("/:code", async (c) => {
 
 	return streamResolvedFile(c.env, c.env.DB, bucket, file.object_key, file);
 });
+
+interface MultipartUploadSessionRow {
+	id: string;
+	bucket_id: number;
+	object_key: string;
+	folder_path: string;
+	file_name: string;
+	content_type: string | null;
+	size: number;
+	is_public: number;
+	upload_id: string;
+	created_at: number;
+	updated_at: number;
+}
+
+async function getMultipartUploadSession(
+	db: D1Database,
+	id: string,
+): Promise<MultipartUploadSessionRow | null> {
+	return (
+		(await db
+			.prepare(
+				"SELECT id, bucket_id, object_key, folder_path, file_name, content_type, size, is_public, upload_id, created_at, updated_at FROM multipart_uploads WHERE id = ? LIMIT 1",
+			)
+			.bind(id)
+			.first<MultipartUploadSessionRow>()) ?? null
+	);
+}
 
 async function deleteTrackedFileRecord(
 	db: D1Database,

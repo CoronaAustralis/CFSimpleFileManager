@@ -60,6 +60,21 @@ const SCHEMA_STATEMENTS = [
 	)`,
 	"CREATE INDEX IF NOT EXISTS idx_file_shares_code ON file_shares(code)",
 	"CREATE INDEX IF NOT EXISTS idx_file_shares_active ON file_shares(is_active)",
+	`CREATE TABLE IF NOT EXISTS multipart_uploads (
+		id TEXT PRIMARY KEY,
+		bucket_id INTEGER NOT NULL,
+		object_key TEXT NOT NULL,
+		folder_path TEXT NOT NULL DEFAULT '',
+		file_name TEXT NOT NULL,
+		content_type TEXT,
+		size INTEGER NOT NULL,
+		is_public INTEGER NOT NULL DEFAULT 0,
+		upload_id TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	)`,
+	"CREATE INDEX IF NOT EXISTS idx_multipart_uploads_bucket_key ON multipart_uploads(bucket_id, object_key)",
+	"CREATE INDEX IF NOT EXISTS idx_multipart_uploads_updated_at ON multipart_uploads(updated_at)",
 ] as const;
 
 let bootstrapPromise: Promise<void> | null = null;
